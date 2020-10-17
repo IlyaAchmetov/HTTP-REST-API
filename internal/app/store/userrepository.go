@@ -28,9 +28,9 @@ func (r *UserRepository) FindByEmail(email string) (*model.User, error) {
 		"SELECT id, email, encrypted_password FROM users WHERE email = $1",
 		email,
 	).Scan(
-		u.ID,
-		u.Email,
-		u.EncryptedPassword,
+		&u.ID,
+		&u.Email,
+		&u.EncryptedPassword,
 	); err != nil {
 		return nil, err
 	}
