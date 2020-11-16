@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"html/template"
 	"net/http"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/gorilla/handlers"
 	"github.com/gorilla/mux"
+	"github.com/gorilla/schema"
 	"github.com/gorilla/sessions"
 	"github.com/sirupsen/logrus"
 )
@@ -25,6 +27,8 @@ const (
 var (
 	errIncorectEmailOrPassword = errors.New("incorrect email or password")
 	errNotAuthenticated        = errors.New("not authenticated")
+	tpl                        *template.Template
+	decoder                    = schema.NewDecoder()
 )
 
 type ctxKey int8
@@ -34,6 +38,11 @@ type server struct {
 	logger       *logrus.Logger
 	store        store.Store
 	sessionStore sessions.Store
+}
+
+// init ...инициализирую темплейты и загружаю их в память
+func init() {
+	tpl = template.Must(template.ParseGlob("templates/*.gohtml"))
 }
 
 func newServer(store store.Store, sessionStore sessions.Store) *server {
@@ -57,13 +66,31 @@ func (s *server) configureRouter() {
 	s.router.Use(s.setRequestID)
 	s.router.Use(s.logRequest)
 	s.router.Use(handlers.CORS(handlers.AllowedOrigins([]string{"*"})))
+	//s.router.PathPrefix("/").Handler(http.FileServer(http.Dir("./templates")))
 	s.router.HandleFunc("/users", s.handleUsersCreate()).Methods("POST")
 	s.router.HandleFunc("/sessions", s.handleSessionsCreate()).Methods("POST")
-
+	s.router.HandleFunc("/", index).Methods("GET")
+	s.router.HandleFunc("/login", loginpage).Methods("GET")
+	s.router.HandleFunc("/login", s.handleSessionsCreate()).Methods("POST")
 	// Subrouter для всего после /private/...
 	private := s.router.PathPrefix("/private").Subrouter()
 	private.Use(s.authenticateUser)
 	private.HandleFunc("/whoami", s.handleWhoami()).Methods("GET")
+	private.HandleFunc("/dashboard", dashboardpage).Methods("GET")
+}
+
+func index(w http.ResponseWriter, r *http.Request) {
+	tpl.ExecuteTemplate(w, "index.gohtml", nil)
+}
+
+func loginpage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		tpl.ExecuteTemplate(w, "login.gohtml", nil)
+	}
+}
+
+func dashboardpage(w http.ResponseWriter, r *http.Request) {
+	tpl.ExecuteTemplate(w, "dashboard.gohtml", nil)
 }
 
 func (s *server) setRequestID(next http.Handler) http.Handler {
@@ -155,16 +182,25 @@ func (s *server) handleUsersCreate() http.HandlerFunc {
 
 func (s *server) handleSessionsCreate() http.HandlerFunc {
 	type request struct {
-		Email    string `json:"email"`
-		Password string `json:"password"`
+		Email    string `json:"Email"`
+		Password string `json:"Password"`
 	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
-		req := &request{}
-		if err := json.NewDecoder(r.Body).Decode(req); err != nil {
-			s.error(w, r, http.StatusBadRequest, err)
-			return
+
+		femail := r.FormValue("Email")
+		fpassword := r.FormValue("Password")
+		req := struct {
+			Email    string
+			Password string
+		}{
+			Email:    femail,
+			Password: fpassword,
 		}
+		//JSON		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		//JSON			s.error(w, r, http.StatusBadRequest, err)
+		//JSON			return
+		//JSON		}
 
 		u, err := s.store.User().FindByEmail(req.Email)
 		if err != nil || !u.ComparePassword(req.Password) {
@@ -184,8 +220,9 @@ func (s *server) handleSessionsCreate() http.HandlerFunc {
 			s.error(w, r, http.StatusInternalServerError, err)
 			return
 		}
-
+		http.Redirect(w, r, "/private/dashboard", 303) //посылаем пользователя на private/dashboard страницу после логина
 		s.respond(w, r, http.StatusOK, nil)
+
 	}
 }
 
